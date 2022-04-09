@@ -1,0 +1,322 @@
+---
+title: "NYPD Incidents Analysis"
+author: "A. Shabunevich"
+date: "4/6/2022"
+output: pdf_document
+---
+
+### Introduction
+Detailed in the code below are the steps in the Data Science Process. The different parts of the data science process include data cleaning, visualization, analysis, and modeling of data. This document also accounts for biases and will cover some of the bias from myself as well as bias in the model that was chosen.
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(randomForest)
+library(dplyr)
+library(caTools)
+```
+
+### Cleaning Dataset
+The first step of the data science process is cleaning data. To do this, we have been provided data for NYPD Shooting incidents. We first load the data into a dataframe and view the data to initially try to see relationships which we can understand and use to build our model.
+
+Reading the data from csv file.
+```{r get_data, message=FALSE}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?/"
+file_name <- c("NYPD_Shooting_Incident_Data_Historic.csv")
+url <- str_c(url_in, file_name)
+```
+
+Read in the file into dataframe.
+```{r import_data, message=TRUE}
+shooting_incidents <- read_csv(url[1])
+shooting_incidents
+```
+
+Viewing the columns/variables of dataframe to decide which one to keep and which one to delete.
+```{r column_list, message=TRUE}
+colnames(shooting_incidents)
+```
+Getting rid of the unwanted columns/variables: `Lon_Lat` (will be using `BORO` for location); `Longitude` (will be using `BORO` for location); `Latitude` (will be using `BORO` for location); `Y_CORD_CD` (will be using `BORO` for location); `X_CORD_CD` (will be using `BORO` for location); `LOCATION_DESC` (do not need the information about building type); `JURISDICTION_CODE` (do not need jurisdiction where shooting occured); `PRECINCT` (will be using `BORO` for location); `INCIDENT_KEY` (do not need random generated number); `PERP_RACE`, `PERP_SEX`, `PERP_AGE_GROUP` (will focus only on victim group).
+
+Getting rid of unwanted columns/variables, and viewing which ones are left. Only interested in VICTIM columns.
+```{r removing_variables, message=TRUE}
+shooting_incidents <- shooting_incidents %>% select(-c("Lon_Lat", "Longitude", "Latitude", 
+                                                       "Y_COORD_CD", "X_COORD_CD", "PERP_RACE", 
+                                                       "PERP_SEX", "PERP_AGE_GROUP", "LOCATION_DESC",
+                                                       "JURISDICTION_CODE", "PRECINCT", "INCIDENT_KEY"))
+colnames(shooting_incidents)
+```
+
+Change the `OCCUR_DATE` column to a date object type and include only years. Change `OCCUR_TIME` column to time object type and include only hours. Delete all rows with missing data.
+```{r chage_object_type_to_date_time, message=TRUE}
+shooting_incidents <- shooting_incidents %>% 
+  mutate(OCCUR_DATE = year(mdy(OCCUR_DATE))) %>%
+  mutate(OCCUR_TIME = hour(hms(OCCUR_TIME))) %>%
+  filter(VIC_SEX != 'U') %>%
+  na.omit()
+shooting_incidents
+```
+
+More organized dataframe that shows male and female victims by location and time.
+```{r victims_cases, message=TRUE}
+murder_M_F <- shooting_incidents %>%
+  group_by(BORO, VIC_SEX, OCCUR_DATE, OCCUR_TIME, VIC_AGE_GROUP,
+           VIC_RACE, STATISTICAL_MURDER_FLAG) %>%
+  summarise(MURDER = sum(STATISTICAL_MURDER_FLAG),
+            NOT_MURDER = sum(STATISTICAL_MURDER_FLAG == 'FALSE'),
+            NUM_OF_CASES = MURDER + NOT_MURDER) %>%
+  select(BORO, OCCUR_DATE, OCCUR_TIME, NUM_OF_CASES, 
+         STATISTICAL_MURDER_FLAG, MURDER, NOT_MURDER,
+         VIC_SEX, VIC_AGE_GROUP, VIC_RACE) %>%
+  ungroup()
+murder_M_F
+```
+
+After cleaning our data, we generate the summary table. This provides important information about each of the fields contatined in our data table which we can then modify further and manipulate it to visualize trends in the data.
+```{r summary, message=TRUE}
+summary(murder_M_F)
+```
+
+## Visualization
+This section covers a few visualizations about the data which is important. Notice that with visualization, alot of information can be pulled out. For instance in the first plot here, it can be seen that the number of cases has a large portion of male victims compared to female victims. The data can then be broken down further in the next plot which provides a breakdown of the number of cases to the location in New York where the incident occured. From this, it can be seen that Brooklyn has the highest number of cases whereas Staten Island has the fewest number of cases. The following graphs after this provide insight into trends with age and race as well. Some questions that I personally have about this data set is how we can better visualize the data to tell a better story about what is happening overtime. Something to analyze too would be to pull out the dates by year and take a look at whether more cases were happening year by year.
+
+From graph and table below there is more males (9,164) than females (1,766) such that males 83.84% and females 16.16%. Female population there is 22.27% murder and 77.63% not murder. Male population there is 27.66% murder and 72.34% not murder. In both victims populations there is similar ratio between murder and not murder.
+```{r statistics_for_victims_gender_graph}
+#total number of victims
+total <- nrow(murder_M_F)
+#gender column
+gender_name <- c('F', 'M')
+#number of cases based on gender
+total_cases_gender <- c(total_F <- sum(murder_M_F$VIC_SEX=='F'),
+                        total_M <- sum(murder_M_F$VIC_SEX=='M'))
+#number of cases based on gender and murder
+total_cases_murder <- c(murder_F <- sum(murder_M_F$VIC_SEX=='F' & murder_M_F$STATISTICAL_MURDER_FLAG=='TRUE'),
+                        murder_M <- sum(murder_M_F$VIC_SEX=='M' & murder_M_F$STATISTICAL_MURDER_FLAG=='TRUE'))
+#number of cases based on gender and not murder
+total_cases_not_murder <- c(not_murder_F <- sum(murder_M_F$VIC_SEX=='F' & murder_M_F$STATISTICAL_MURDER_FLAG=='FALSE'),
+                            not_murder_M <- sum(murder_M_F$VIC_SEX=='M' & murder_M_F$STATISTICAL_MURDER_FLAG=='FALSE'))
+#percent of cases based on gender
+percent_gender <- c(total_F/total*100,
+                    total_M/total*100)
+#percent of murder cases based on gender
+percent_murder_gender <- c(murder_F/total_F*100,
+                           murder_M/total_M*100)
+#percent of not murder cases based on gebder
+percent_not_murder_gender <- c(not_murder_F/total_F*100,
+                               not_murder_M/total_M*100)
+#table
+gender_analysis <- data.frame(gender_name, total_cases_gender, total_cases_murder,
+                              total_cases_not_murder, percent_gender,
+                              percent_murder_gender, percent_not_murder_gender)
+gender_analysis
+```
+```{r}
+gender_analysis %>%
+  ggplot(aes(x=gender_name, y=total_cases_gender)) +
+  geom_bar(stat="identity") +
+  ggtitle('Gender Distribution')
+```
+
+By looking at the graph below, thre most cases happened in `BROOKLYN` and `BRONX` areas. The percent of cases happened in `BRONX` is 28.94%, `BROOKLYN` is 32.32%, `MANSHATTAN` is 15.95%, `QUEENS` is 17.91% and `STATEN ISLAND` is 4.88%. By looking in website of 2020 population censes, found out that incident cases per population of BORO is relatively low, such that `BRONX` is 0.00215 (0.215%), `BROOKLYN` is 0.00129 (0.129%), `MANHATTAN` is 0.00103 (0.103%), `QUEENS` is 0.00081 (0.081%), and `STATEN ISLAND` is 0.00107 (0.107%).
+```{r}
+boro_name <- c('BRONX', 'BROOKLYN', 'MANHATTAN', 'QUEENS', 'STATEN ISLAND')
+
+#cases by BORO
+total_cases_boro <- c(cases_BRONX <- sum(murder_M_F$BORO=='BRONX'),
+                      cases_BROOKLYN <- sum(murder_M_F$BORO=='BROOKLYN'),
+                      cases_MANHATTAN <- sum(murder_M_F$BORO=='MANHATTAN'),
+                      cases_QUEENS <-sum(murder_M_F$BORO=='QUEENS'),
+                      cases_STATEN <- sum(murder_M_F$BORO=='STATEN ISLAND'))
+
+#percent of cases by BORO
+percent_cases_boro <- c(cases_BRONX/total*100,
+                        cases_BROOKLYN/total*100,
+                        cases_MANHATTAN/total*100,
+                        cases_QUEENS/total*100,
+                        cases_STATEN/total*100)
+
+#total area population (from website) vs given cases
+percent_case_population_boro <-c(cases_BRONX/1472654*100,
+                                 cases_BROOKLYN/2736074*100,
+                                 cases_MANHATTAN/1694251*100,
+                                 cases_QUEENS/2405464*100,
+                                 cases_STATEN/495747*100)
+
+boro_analysis <- data.frame(boro_name, total_cases_boro, percent_cases_boro, percent_case_population_boro)
+boro_analysis
+```
+```{r}
+boro_analysis %>%
+  ggplot(aes(x=boro_name, y=total_cases_boro)) +
+  geom_bar(stat="identity") +
+  ggtitle('Incidents Distribution By Borough')
+```
+
+This graph illustrates incident cases per population, in percentage. In the 'Percent Incidents By Borough Population' graph there is more incidents per population occure in `BRONX`, and the least number of incidents per populatin occure in `QUEENS`.
+```{r}
+boro_analysis %>%
+  ggplot(aes(x=boro_name, y=percent_case_population_boro)) +
+  geom_bar(stat="identity") +
+  ggtitle('Percent Incidents By Borough Population')
+```
+
+This graph shows the cases of incidents distributed by age. The age groups with the most cases are '18-24' (33.05%) and '25-44' (40.15%).
+```{r}
+age_group <- c('<18', '18-24', '25-44', '45-64', '65+' ,'UNKNOWN')
+#number of cases in each group
+total_cases_age <- c(cases_18 <- sum(murder_M_F$VIC_AGE_GROUP=='<18'), 
+                     cases_18_24 <- sum(murder_M_F$VIC_AGE_GROUP=='18-24'), 
+                     cases_25_44 <- sum(murder_M_F$VIC_AGE_GROUP=='25-44'), 
+                     cases_45_64 <- sum(murder_M_F$VIC_AGE_GROUP=='45-64'), 
+                     cases_65 <- sum(murder_M_F$VIC_AGE_GROUP=='65+'), 
+                     cases_u <- sum(murder_M_F$VIC_AGE_GROUP=='UNKNOWN'))
+#percent of age group by total cases
+percent_cases_age <- c(percet_cases_18 <- cases_18/total*100, 
+                       percet_cases_18_24 <- cases_18_24/total*100, 
+                       percet_cases_25_44 <- cases_25_44/total*100, 
+                       percet_cases_45_64 <- cases_45_64/total*100, 
+                       percet_cases_65 <- cases_65/total*100, 
+                       percet_cases_u <- cases_u/total*100)
+age_group_analysis <- data.frame(age_group, total_cases_age, percent_cases_age)
+age_group_analysis
+```
+```{r}
+age_group_analysis %>%
+  ggplot(aes(x=age_group, y=total_cases_age)) +
+  geom_bar(stat="identity") +
+  ggtitle('Incidents Distribution by Age Group')
+```
+
+This graph shows the number of victims distributed by race. The most victims in race goup `BLACK`, which is 6,301 (57.65%) cases. The next two groups of high number of cases are `WHITE HISPANIC` with 2,195 (20.08%) cases and `BLACK HISPANIC` with 1,553 (14.21%) cases.
+```{r}
+race_group <- c('WHITE HISPANIC', 'WHITE', 'UNKNOWN', 'BLACK HISPANIC', 'BLACK',
+                'ASIAN/PACIFIC ISLANDER', 'AMERICAN INDIAN/ALASKAN NATIVE')
+#number of cases in each group
+total_cases_race <- c(cases_WHITE_HISPANIC <- sum(murder_M_F$VIC_RACE=='WHITE HISPANIC'),
+                      cases_WHITE <- sum(murder_M_F$VIC_RACE=='WHITE'),
+                      cases_UNCKNOWN <- sum(murder_M_F$VIC_RACE=='UNKNOWN'),
+                      cases_BLACK_HISPANIC <- sum(murder_M_F$VIC_RACE=='BLACK HISPANIC'),
+                      cases_BLACK <- sum(murder_M_F$VIC_RACE=='BLACK'),
+                      cases_ASIAN <- sum(murder_M_F$VIC_RACE=='ASIAN / PACIFIC ISLANDER'),
+                      cases_AMERICAN_INDIAN <- sum(murder_M_F$VIC_RACE=='AMERICAN INDIAN/ALASKAN NATIVE'))
+#percent of cases of each group
+percent_cases_race <- c(percent_cases_WHITE_HISPANIC <- cases_WHITE_HISPANIC/total*100,
+                        percent_cases_WHITE <- cases_WHITE/total*100,
+                        percent_cases_UNCKNOWN <- cases_UNCKNOWN/total*100,
+                        percent_cases_BLACK_HISPANIC <- cases_BLACK_HISPANIC/total*100,
+                        percent_cases_BLACK <- cases_BLACK/total*100,
+                        percent_cases_ASIAN <- cases_ASIAN/total*100,
+                        percent_cases_AMERICAN_INDIAN <- cases_AMERICAN_INDIAN/total*100)
+race_group_analysis <- data.frame(race_group, total_cases_race, percent_cases_race)
+race_group_analysis
+```
+```{r race_victim_graph, message=TRUE}
+race_group_analysis %>%
+  ggplot(aes(x=race_group, y=total_cases_race)) +
+  geom_bar(stat="identity") + coord_flip() +
+  ggtitle('Number of Incidents in Each Race')
+```
+## Analysis
+As apart of our analysis and modeling, I chose to try to implement a random forest model. Something that I found out was that the dataset needed to be broken out to have a training and validation dataset. Prior to building our model out further I needed to manipulate the data in order to apply the analysis correctly. During our analysis, we can see how our model accuracy decreases when specific variables are ommitted. This is seen by looking at the %IncMSE table generated later in this section. The IncNodeOurity table show that the higher a value is, the accuracy decreases in the model but it can also tell us the importance of variables in our model. With our model that we built, from the output of the random forest regression algorithm, we can see that the model with the variables I included is not as good as one would hope. The reasoning for this will be discussed further in the conclusion of the Rmd document.
+
+Now I want to use Random Forest algorithm to pridict gender of the victims. Need to create a new table that has only numerical values.
+```{r, message=TRUE}
+model_data <- shooting_incidents %>%
+  mutate(BORO=case_when(
+    BORO=='BRONX' ~ 0,
+    BORO=='BROOKLYN' ~ 1,
+    BORO=='MANHATTAN' ~ 2,
+    BORO=='QUEENS' ~ 3,
+    BORO=='STATEN ISLAND' ~ 4)) %>%
+  mutate(VIC_AGE_GROUP=case_when(
+    VIC_AGE_GROUP=='<18' ~ 0,
+    VIC_AGE_GROUP=='18-24' ~ 1,
+    VIC_AGE_GROUP=='25-44' ~ 2,
+    VIC_AGE_GROUP=='45-64' ~ 3,
+    VIC_AGE_GROUP=='65+' ~ 4,
+    VIC_AGE_GROUP=='UNKNOWN' ~ 5)) %>%
+  mutate(VIC_SEX=case_when(
+    VIC_SEX=='M' ~ 0,
+    VIC_SEX=='F' ~ 1)) %>%
+  mutate(VIC_RACE=case_when(
+    VIC_RACE=='BLACK' ~ 0,
+    VIC_RACE=='WHITE HISPANIC' ~ 1,
+    VIC_RACE=='WHITE' ~ 2,
+    VIC_RACE=='ASIAN / PACIFIC ISLANDER' ~ 3,
+    VIC_RACE=='BLACK HISPANIC' ~ 4,
+    VIC_RACE=='UNKNOWN' ~ 5,
+    VIC_RACE=='AMERICAN INDIAN/ALASKAN NATIVE' ~ 6)) %>%
+  mutate(STATISTICAL_MURDER_FLAG=case_when(
+    STATISTICAL_MURDER_FLAG=='FALSE' ~ 0,
+    STATISTICAL_MURDER_FLAG=='TRUE' ~ 1))
+model_data
+```
+
+By viewing the summary table, we can see that there is an issue. Each column need to be change to different data type.
+```{r}
+summary(model_data)
+```
+
+Code below changes some columns into integer variables and some columns into factor variables.
+```{r}
+model_data <- model_data %>%
+  transform(OCCUR_DATE = as.integer(OCCUR_DATE),
+            OCCUR_TIME = as.integer(OCCUR_TIME),
+            BORO = as.factor(BORO),
+            STATISTICAL_MURDER_FLAG = as.factor(STATISTICAL_MURDER_FLAG),
+            VIC_AGE_GROUP = as.factor(VIC_AGE_GROUP),
+            VIC_SEX = as.factor(VIC_SEX),
+            VIC_RACE = as.factor(VIC_RACE)
+)
+
+sapply(model_data, class)
+```
+
+Print summary to check if problem is fixed.
+```{r}
+summary(model_data)
+```
+
+Now need to split data into train and validation datasets with ratio 7:3.
+```{r, message=TRUE}
+train <- sample(nrow(model_data), 0.7*nrow(model_data), replace = FALSE)
+train_set <- model_data[train,]
+valid_set <- model_data[-train,]
+```
+Create a Random Forest model. Used a standard parameter with number of trees set to 500 and the variable tried at each split is 2. The OOB of error rate is the prediction error, which is 9.28%. Thus, accuracy is (100-9.19) 90.72%.
+Confusion matrix summarize performance of random forest algorithm that was trained on given data. Such as, 14,942 correctly classify as males, 27 correctly clasify as females, 21 incorrectly classify males as females 1,511 incorrectly classify females as males.
+```{r, message=TRUE}
+model <- randomForest(VIC_SEX ~. , data=train_set, ntree= 500,  mtry=2, importance=TRUE)
+model
+```
+
+```{r, message=TRUE}
+varImpPlot(model)
+```
+
+By looking at MeanDecreaseAccuracy and MeanDecreaseGini it shows that STATISTICAL_MURDER_FLAG has very low importance. This means that STATISTICAL_MURDER_FLAG is the least important variable to measure in our prediction.
+```{r}
+importance(model)
+```
+
+Predict number of males and females by using RandomForest model. Therefore,
+ - 6,397 males was correctly classified
+ - 17 females was correctly classified
+ - 10 males was incorrectly classified
+ - 649 females was incorrectly classified
+```{r}
+#exclyde `VIC_SEX` column
+pred = predict(model, newdata=valid_set[-6])
+#include `VIC_SEX` column
+cm = table(valid_set[,6], pred)
+cm
+```
+
+It predicted by 639 more males than in actual set and predicted by 639 less females than in actual set.
+```{r}
+result = data.frame(valid_set$VIC_SEX, pred)
+summary(result)
+```
+
+## Conclusion
+In conclusion, from this data, there is alot that can be done between cleaning, visualization, and modeling which can help us as data scientist understand more about the issue itself. Some of the bias which was introduced here was how I cleaned the data. I removed data by deleting columns and rather than filling them with dummy values, I completely removed them which causes the loss of some data points. Another thing is that the visualization and analysis was performed on fields in the data which I found important; however, this means that there could be fields that would be important to getting the full picture being left out. The data itself has a large amount of data for males compared to females. The question is then raised, how is the data collected and what things could be getting ommitted during the date collection process. The model which was implemented uses a random forest regression algorithm which has bias depending on the number of inputs being provided. In the future, a better model can be built around providing more fields for the model to be built around. It is important to understand the data science process on top of the methods being used as both play an important role for relaying the correct information and identify trends in the datasets available to us. The dataset analyzed  in this report could be used in implementing methods to improve community safety focused around areas with a higher number of shooting cases. It is important to know how to find relationships in the data in order to make intelligent decisions in the world around us.
